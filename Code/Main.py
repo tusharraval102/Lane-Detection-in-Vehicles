@@ -8,25 +8,6 @@ import matplotlib.image as mpimg
 import math
 %matplotlib inline
 
-# Reading an image
-image = mpimg.imread('Dataset/Input/15.jpg')
-
-# Printing out some stats and plotting
-print('This image is:', type(image), 'with dimensions:', image.shape)
-plt.imshow(image)
-
-# def process_image(image, 
-#                   kernel_size=5,
-#                   low_threshold=100, 
-#                   high_threshold=250, 
-#                   rho=1, 
-#                   theta=np.pi/180, 
-#                   threshold=30,
-#                     min_line_len=100, 
-#                     max_line_gap=200):
-    
-#     # Convert to grayscale
-
 # This function converts an image to grayscale
 def convert_to_greyscale(image):
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -65,41 +46,88 @@ def hough_line_transformation(image, rho, theta, threshold, min_line_len, max_li
     return line_img
 
 # This function draws lines on an image
-def draw_lines(image, lines, color=[255, 0, 0], thickness=7):
-    x_bottom_pos = []
-    x_upper_pos = []
-    x_bottom_neg = []
-    x_upper_neg = []
+def display_lines(image, lines):
+    lines_image = np.zeros_like(image)
+    #make sure array isn't empty
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line
+            #draw lines on a black image
+            cv2.line(lines_image, (x1, y1), (x2, y2), (255, 0, 0), 7)
+    return lines_image
 
-    y_bottom = 540
-    y_upper = 315
+def average(image, lines):
+    left = []
+    right = []
 
-    slope = 0
-    b = 0
+    if lines is not None:
+      for line in lines:
+        x1, y1, x2, y2 = line.reshape(4)
+        #fit line to points, return slope and y-int
+        parameters = np.polyfit((x1, x2), (y1, y2), 1)
+        slope = parameters[0]
+        y_int = parameters[1]
+        #lines on the right have positive slope, and lines on the left have neg slope
+        if slope < 0:
+            left.append((slope, y_int))
+        else:
+            right.append((slope, y_int))
+            
+    #takes average among all the columns (column0: slope, column1: y_int)
+    right_avg = np.average(right, axis=0)
+    left_avg = np.average(left, axis=0)
+    #create lines based on averages calculates
+    left_line = make_points(image, left_avg)
+    right_line = make_points(image, right_avg)
+    return np.array([left_line, right_line])
 
-    for line in lines:
-        for x1,y1,x2,y2 in line:
-            if ((y2-y1)/(x2-x1)) > 0.5 and ((y2-y1)/(x2-x1)) < 0.8:
-                slope = (y2-y1)/(x2-x1)
-                b = y1 - slope*x1
-                x_bottom_pos.append((y_bottom-b)/slope)
-                x_upper_pos.append((y_upper-b)/slope)
-
-            elif ((y2-y1)/(x2-x1)) < -0.5 and ((y2-y1)/(x2-x1)) > -0.8:
-                slope = (y2-y1)/(x2-x1)
-                b = y1 - slope*x1
-                x_bottom_neg.append((y_bottom-b)/slope)
-                x_upper_neg.append((y_upper-b)/slope)
-
-        # Create a new 2d Array with means
-        lines_mean = np.array([[int(np.mean(x_bottom_pos)), int(np.mean(y_bottom)), int(np.mean(x_upper_pos)), int(np.mean(y_upper))],
-                                 [int(np.mean(x_bottom_neg)), int(np.mean(y_bottom)), int(np.mean(x_upper_neg)), int(np.mean(y_upper))]])
-        
-        # Draw lines
-        for i in range(len(lines_mean)):
-            cv2.line(image, (lines_mean[i][0], lines_mean[i][1]), (lines_mean[i][2], lines_mean[i][3]), color, thickness)
+def make_points(image, average):
+    slope, y_int = average
+    y1 = image.shape[0]
+    #how long we want our lines to be --> 3/5 the size of the image
+    y2 = int(y1 * (2/5))
+    #determine algebraically
+    x1 = int((y1 - y_int) // slope)
+    x2 = int((y2 - y_int) // slope)
+    return np.array([x1, y1, x2, y2])
 
 # This function merges the lines with the original image
 def merge_lines_with_image(image, lines):
     return cv2.addWeighted(image, 0.8, lines, 1, 0)
 
+# Pipeline for processing an image
+def image_pipeline(file):
+    kernel_size = 5
+    low_threshold = 50
+    high_threshold = 150
+    rho = 3
+    theta = np.pi/180
+    threshold = 15
+    min_line_len = 100
+    max_line_gap = 50
+    
+
+    # Read image from file
+    image = mpimg.imread(file)
+
+    # Convert image to grayscale
+    grayscale_image = convert_to_greyscale(image)
+
+    # Apply Gaussian blur
+    gaussian = apply_gaussian_blur(image, grayscale_image)
+
+    # Apply Canny transform
+    canny = apply_canny_transform(gaussian, low_threshold, high_threshold)
+
+    # Apply mask
+    vertices = np.array([[(0,image.shape[0]),(480, 290), (700, 290), (image.shape[1],image.shape[0])]], dtype=np.int32)
+    masked_image = apply_mask(canny, vertices)
+
+    # Apply Hough Line Transformation
+    hough = hough_line_transformation(masked_image, rho, theta, threshold, min_line_len, max_line_gap)
+    lines = cv2.cvtColor(hough, cv2.COLOR_BGR2RGB)
+
+    # Merge lines with original image
+    merged_image = merge_lines_with_image(image, lines)
+
+    return merged_image
